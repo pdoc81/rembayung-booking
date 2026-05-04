@@ -8,6 +8,7 @@ import pytest
 from rembayung_booker import (
     build_config,
     close_browser_quietly,
+    create_booking_attempts,
     extract_time_minutes,
     jitter_delay,
     parse_clock_time,
@@ -43,6 +44,7 @@ def test_book_mode_defaults_preload_at_850_and_start_at_900():
         tab2_delay_seconds=90,
         screenshot_interval_seconds=10,
         widget_timeout_seconds=120,
+        backup_3_pax=False,
         preload_time="20:50",
         start_time="21:00",
         headless=False,
@@ -57,6 +59,51 @@ def test_book_mode_defaults_preload_at_850_and_start_at_900():
     assert config.retry_min_seconds == 0.25
     assert config.retry_max_seconds == 0.5
     assert config.waiting_room_poll_seconds == 1.0
+    assert config.backup_3_pax is False
+
+
+def test_book_mode_uses_one_attempt_by_default():
+    args = argparse.Namespace(
+        mode="book",
+        url="https://example.test",
+        max_retry_seconds=7 * 60,
+        retry_min_seconds=0.25,
+        retry_max_seconds=0.5,
+        waiting_room_poll_seconds=1.0,
+        tab2_delay_seconds=90,
+        screenshot_interval_seconds=10,
+        widget_timeout_seconds=120,
+        backup_3_pax=False,
+        preload_time="20:50",
+        start_time="21:00",
+        headless=False,
+        skip_schedule=False,
+        submit_final=False,
+    )
+
+    assert create_booking_attempts(build_config(args)) == [(4, "tab1-4pax", 0)]
+
+
+def test_book_mode_can_enable_three_pax_backup():
+    args = argparse.Namespace(
+        mode="book",
+        url="https://example.test",
+        max_retry_seconds=7 * 60,
+        retry_min_seconds=0.25,
+        retry_max_seconds=0.5,
+        waiting_room_poll_seconds=1.0,
+        tab2_delay_seconds=90,
+        screenshot_interval_seconds=10,
+        widget_timeout_seconds=120,
+        backup_3_pax=True,
+        preload_time="20:50",
+        start_time="21:00",
+        headless=False,
+        skip_schedule=False,
+        submit_final=False,
+    )
+
+    assert create_booking_attempts(build_config(args)) == [(4, "tab1-4pax", 0), (3, "tab2-3pax", 90)]
 
 
 def test_parse_clock_time_accepts_hh_mm_and_hh_mm_ss():

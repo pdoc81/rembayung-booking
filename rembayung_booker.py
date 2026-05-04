@@ -77,6 +77,7 @@ class RunConfig:
     start_time: time
     tab2_delay_seconds: int
     widget_timeout_seconds: int
+    backup_3_pax: bool
     headed: bool
     skip_schedule: bool
     submit_final: bool
@@ -503,6 +504,13 @@ async def close_browser_quietly(browser: Browser, logger: JsonlLogger) -> None:
         logger.write("browser_close_failed", error=repr(exc))
 
 
+def create_booking_attempts(config: RunConfig) -> list[tuple[int, str, int]]:
+    attempts = [(4, "tab1-4pax", 0)]
+    if config.mode == "book" and config.backup_3_pax:
+        attempts.append((3, "tab2-3pax", config.tab2_delay_seconds))
+    return attempts
+
+
 async def run_single_tab(
     browser: Browser,
     config: RunConfig,
@@ -552,23 +560,11 @@ async def run(config: RunConfig, details: GuestDetails, logger: JsonlLogger) -> 
                 await wait_until_today_at(config.preload_time, logger, "preload")
                 logger.write("preload_window_started")
             tasks = [
-                asyncio.create_task(run_single_tab(browser, config, details, logger, 4, "tab1-4pax", done)),
-            ]
-            if config.mode == "book":
-                tasks.append(
-                    asyncio.create_task(
-                        run_single_tab(
-                            browser,
-                            config,
-                            details,
-                            logger,
-                            3,
-                            "tab2-3pax",
-                            done,
-                            delay_seconds=config.tab2_delay_seconds,
-                        )
-                    )
+                asyncio.create_task(
+                    run_single_tab(browser, config, details, logger, party_size, tab_name, done, delay_seconds=delay_seconds)
                 )
+                for party_size, tab_name, delay_seconds in create_booking_attempts(config)
+            ]
             await asyncio.gather(*tasks)
             if done.is_set():
                 logger.write("browser_kept_open")
@@ -593,6 +589,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retry-min-seconds", type=float, default=0.25)
     parser.add_argument("--retry-max-seconds", type=float, default=0.5)
     parser.add_argument("--waiting-room-poll-seconds", type=float, default=1.0)
+    parser.add_argument("--backup-3-pax", action="store_true", help="Open a second backup window for 3 pax after --tab2-delay-seconds.")
     parser.add_argument("--tab2-delay-seconds", type=int, default=90)
     parser.add_argument("--screenshot-interval-seconds", type=int, default=10)
     parser.add_argument("--widget-timeout-seconds", type=int, default=120)
@@ -635,6 +632,7 @@ def build_config(args: argparse.Namespace) -> RunConfig:
         start_time=start_time,
         tab2_delay_seconds=args.tab2_delay_seconds,
         widget_timeout_seconds=args.widget_timeout_seconds,
+        backup_3_pax=args.backup_3_pax,
         headed=not args.headless,
         skip_schedule=args.skip_schedule,
         submit_final=args.submit_final,
@@ -648,7 +646,10 @@ def show_summary(config: RunConfig, details: GuestDetails, logger: JsonlLogger) 
     table.add_row("Mode", config.mode)
     table.add_row("URL", config.url)
     table.add_row("Target date", config.target_date)
-    table.add_row("Party priority", "4 pax, then 3 pax after 90 seconds in book mode")
+    table.add_row(
+        "Party priority",
+        f"4 pax only; 3 pax backup after {config.tab2_delay_seconds} seconds" if config.backup_3_pax else "4 pax only",
+    )
     table.add_row("Timezone", "Asia/Kuala_Lumpur")
     table.add_row("Preload time", config.preload_time.isoformat())
     table.add_row("Booking start", config.start_time.isoformat())

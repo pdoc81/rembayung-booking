@@ -32,9 +32,9 @@ In `book` mode it can also fill your name, phone, and email. Final submit is dis
 ## Safety Rules
 
 - Headed browser mode is the default so you can see everything.
-- Maximum two tabs in `book` mode.
-- Tab 1 attempts 4 pax.
-- Tab 2 waits 90 seconds, then attempts 3 pax.
+- `book` mode opens one browser window by default and attempts 4 pax.
+- Add `--backup-3-pax` only if you want a second backup window for 3 pax.
+- With `--backup-3-pax`, the backup waits 90 seconds by default before attempting 3 pax.
 - In scheduled `book` mode, the browser opens and joins the queue at `20:50` Malaysia time.
 - Booking interactions start at `21:00:00` Malaysia time.
 - Retries use random jitter between 0.25 and 0.5 seconds by default.
@@ -67,6 +67,12 @@ You can tune the schedule and polling if needed:
 
 ```bash
 python rembayung_booker.py book --preload-time 20:50 --start-time 21:00 --retry-min-seconds 0.25 --retry-max-seconds 0.5 --waiting-room-poll-seconds 1
+```
+
+If you explicitly want the second 3-pax backup window:
+
+```bash
+python rembayung_booker.py book --backup-3-pax
 ```
 
 ```bash
@@ -151,6 +157,8 @@ python rembayung_booker.py book
 ```
 
 This uses the default `20:50` preload/queue time and `21:00:00` booking start time. For the first live attempt, keep `--submit-final` off. After the slot is selected and details are filled, complete the last step manually in the visible browser.
+
+This opens one browser window by default. Use `--backup-3-pax` only if you are comfortable with the second backup window.
 
 ## Notes
 
