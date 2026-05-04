@@ -12,6 +12,8 @@ from rembayung_booker import (
     extract_time_minutes,
     jitter_delay,
     parse_clock_time,
+    should_keep_browser_open,
+    wait_for_manual_browser_close,
 )
 
 
@@ -26,6 +28,21 @@ class FakeLogger:
 class BrokenBrowser:
     async def close(self):
         raise Exception("Connection closed while reading from the driver")
+
+
+class ManualCloseBrowser:
+    def __init__(self):
+        self.handler = None
+
+    def is_connected(self):
+        return True
+
+    def on(self, event, handler):
+        if event == "disconnected":
+            self.handler = handler
+
+    def trigger_close(self):
+        self.handler()
 
 
 def test_requirements_include_windows_timezone_data():
@@ -129,6 +146,68 @@ def test_close_browser_quietly_logs_close_failures():
 
     assert logger.events == [
         ("browser_close_failed", {"error": "Exception('Connection closed while reading from the driver')"})
+    ]
+
+
+def test_headed_mode_keeps_browser_open_for_manual_close():
+    args = argparse.Namespace(
+        mode="book",
+        url="https://example.test",
+        max_retry_seconds=7 * 60,
+        retry_min_seconds=0.25,
+        retry_max_seconds=0.5,
+        waiting_room_poll_seconds=1.0,
+        tab2_delay_seconds=90,
+        screenshot_interval_seconds=10,
+        widget_timeout_seconds=120,
+        backup_3_pax=False,
+        preload_time="20:50",
+        start_time="21:00",
+        headless=False,
+        skip_schedule=False,
+        submit_final=False,
+    )
+
+    assert should_keep_browser_open(build_config(args)) is True
+
+
+def test_headless_mode_closes_browser_when_done():
+    args = argparse.Namespace(
+        mode="book",
+        url="https://example.test",
+        max_retry_seconds=7 * 60,
+        retry_min_seconds=0.25,
+        retry_max_seconds=0.5,
+        waiting_room_poll_seconds=1.0,
+        tab2_delay_seconds=90,
+        screenshot_interval_seconds=10,
+        widget_timeout_seconds=120,
+        backup_3_pax=False,
+        preload_time="20:50",
+        start_time="21:00",
+        headless=True,
+        skip_schedule=False,
+        submit_final=False,
+    )
+
+    assert should_keep_browser_open(build_config(args)) is False
+
+
+def test_wait_for_manual_browser_close_returns_after_browser_disconnects():
+    browser = ManualCloseBrowser()
+    logger = FakeLogger()
+
+    async def run_wait():
+        task = asyncio.create_task(wait_for_manual_browser_close(browser, logger))
+        await asyncio.sleep(0)
+        browser.trigger_close()
+        await task
+
+    asyncio.run(run_wait())
+
+    assert logger.events == [
+        ("browser_kept_open", {}),
+        ("browser_closed_by_user", {}),
     ]
 
 

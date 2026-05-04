@@ -511,6 +511,28 @@ def create_booking_attempts(config: RunConfig) -> list[tuple[int, str, int]]:
     return attempts
 
 
+def should_keep_browser_open(config: RunConfig) -> bool:
+    return config.headed
+
+
+async def wait_for_manual_browser_close(browser: Browser, logger: JsonlLogger) -> None:
+    logger.write("browser_kept_open")
+    if not browser.is_connected():
+        logger.write("browser_closed_by_user")
+        return
+
+    loop = asyncio.get_running_loop()
+    closed = loop.create_future()
+
+    def mark_closed() -> None:
+        if not closed.done():
+            closed.set_result(None)
+
+    browser.on("disconnected", mark_closed)
+    await closed
+    logger.write("browser_closed_by_user")
+
+
 async def run_single_tab(
     browser: Browser,
     config: RunConfig,
@@ -566,13 +588,11 @@ async def run(config: RunConfig, details: GuestDetails, logger: JsonlLogger) -> 
                 for party_size, tab_name, delay_seconds in create_booking_attempts(config)
             ]
             await asyncio.gather(*tasks)
-            if done.is_set():
-                logger.write("browser_kept_open")
-                console.print("[bold red]ACTION REQUIRED[/bold red] Browser remains open for manual completion.")
-                while True:
-                    await asyncio.sleep(3600)
+            if should_keep_browser_open(config):
+                console.print("[bold red]ACTION REQUIRED[/bold red] Browser remains open. Close the browser window when you are done.")
+                await wait_for_manual_browser_close(browser, logger)
         finally:
-            if not done.is_set():
+            if not should_keep_browser_open(config):
                 await close_browser_quietly(browser, logger)
 
 

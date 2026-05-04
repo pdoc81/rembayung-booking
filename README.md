@@ -40,7 +40,7 @@ In `book` mode it can also fill your name, phone, and email. Final submit is dis
 - Retries use random jitter between 0.25 and 0.5 seconds by default.
 - Waiting-room checks poll every 1 second by default.
 - Default retry window is 7 minutes.
-- The browser stays open if manual action is required.
+- In headed mode, the browser stays open until you close it manually.
 - The tool stops on OTP, CAPTCHA, payment, or deposit screens.
 
 ## Modes
@@ -156,7 +156,7 @@ The script reads this file directly, so no extra dotenv dependency is needed.
 python rembayung_booker.py book
 ```
 
-This uses the default `20:50` preload/queue time and `21:00:00` booking start time. For the first live attempt, keep `--submit-final` off. After the slot is selected and details are filled, complete the last step manually in the visible browser.
+This uses the default `20:50` preload/queue time and `21:00:00` booking start time. For the first live attempt, keep `--submit-final` off. After the slot is selected and details are filled, complete the last step manually in the visible browser. The script will keep the browser open until you close it yourself.
 
 This opens one browser window by default. Use `--backup-3-pax` only if you are comfortable with the second backup window.
 
