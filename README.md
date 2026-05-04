@@ -35,7 +35,10 @@ In `book` mode it can also fill your name, phone, and email. Final submit is dis
 - Maximum two tabs in `book` mode.
 - Tab 1 attempts 4 pax.
 - Tab 2 waits 90 seconds, then attempts 3 pax.
-- Retries use random jitter between 0.75 and 1.25 seconds.
+- In scheduled `book` mode, the browser opens and joins the queue at `20:50` Malaysia time.
+- Booking interactions start at `21:00:00` Malaysia time.
+- Retries use random jitter between 0.25 and 0.5 seconds by default.
+- Waiting-room checks poll every 1 second by default.
 - Default retry window is 7 minutes.
 - The browser stays open if manual action is required.
 - The tool stops on OTP, CAPTCHA, payment, or deposit screens.
@@ -58,7 +61,13 @@ Attempts the inspection flow immediately: date, pax, slot detection, earliest sl
 python rembayung_booker.py book
 ```
 
-Waits until today at `20:57` Malaysia time, opens the tabs to warm the session, then starts booking interactions at `21:00:00`.
+Waits until today at `20:50` Malaysia time, opens the browser to join the queue, then starts booking interactions at `21:00:00`.
+
+You can tune the schedule and polling if needed:
+
+```bash
+python rembayung_booker.py book --preload-time 20:50 --start-time 21:00 --retry-min-seconds 0.25 --retry-max-seconds 0.5 --waiting-room-poll-seconds 1
+```
 
 ```bash
 python rembayung_booker.py book --skip-schedule
@@ -141,7 +150,7 @@ The script reads this file directly, so no extra dotenv dependency is needed.
 python rembayung_booker.py book
 ```
 
-For the first live attempt, keep `--submit-final` off. After the slot is selected and details are filled, complete the last step manually in the visible browser.
+This uses the default `20:50` preload/queue time and `21:00:00` booking start time. For the first live attempt, keep `--submit-final` off. After the slot is selected and details are filled, complete the last step manually in the visible browser.
 
 ## Notes
 

@@ -69,6 +69,9 @@ class RunConfig:
     target_date: str
     target_date_iso: str
     max_retry_seconds: int
+    retry_min_seconds: float
+    retry_max_seconds: float
+    waiting_room_poll_seconds: float
     screenshot_interval_seconds: int
     preload_time: time
     start_time: time
@@ -129,8 +132,8 @@ def validate_guest_details(details: GuestDetails) -> None:
         raise SystemExit(f"Missing required .env values: {', '.join(missing)}")
 
 
-def jitter_delay() -> float:
-    return random.uniform(0.75, 1.25)
+def jitter_delay(min_seconds: float = 0.75, max_seconds: float = 1.25) -> float:
+    return random.uniform(min_seconds, max_seconds)
 
 
 def extract_time_minutes(text: str) -> int | None:
@@ -249,7 +252,7 @@ class RembayungBooker:
                     waiting_room_logged = True
                     await self.mark_state("cloudflare-waiting-room")
                     self.logger.write("waiting_room_detected", tab=self.tab_name)
-                await self.page.wait_for_timeout(5000)
+                await self.page.wait_for_timeout(int(self.config.waiting_room_poll_seconds * 1000))
                 continue
             await self.page.wait_for_timeout(1500)
             await self.mark_state("widget-loaded")
@@ -477,7 +480,7 @@ class RembayungBooker:
                 await self.safe_stop_detected()
                 done.set()
                 return True
-            await asyncio.sleep(jitter_delay())
+            await asyncio.sleep(jitter_delay(self.config.retry_min_seconds, self.config.retry_max_seconds))
         self.logger.write("retry_deadline_reached", tab=self.tab_name, party_size=party_size)
         return False
 
@@ -581,26 +584,55 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Rembayung reservation assistant")
     parser.add_argument("mode", choices=("test", "dry-run", "book"))
     parser.add_argument("--url", default=os.environ.get("REMBAYUNG_URL", DEFAULT_URL))
-    parser.add_argument("--skip-schedule", action="store_true", help="Start immediately instead of waiting for 20:57/21:00.")
+    parser.add_argument("--skip-schedule", action="store_true", help="Start immediately instead of waiting for the preload/start times.")
     parser.add_argument("--headless", action="store_true", help="Run browser hidden. Headed mode is the safe default.")
     parser.add_argument("--submit-final", action="store_true", help="In book mode, click the final continue/submit button after filling details.")
+    parser.add_argument("--preload-time", type=parse_clock_time, default=parse_clock_time("20:50"), help="When book mode opens the browser and joins the queue. Use HH:MM or HH:MM:SS.")
+    parser.add_argument("--start-time", type=parse_clock_time, default=parse_clock_time("21:00"), help="When book mode starts booking interactions. Use HH:MM or HH:MM:SS.")
     parser.add_argument("--max-retry-seconds", type=int, default=7 * 60)
+    parser.add_argument("--retry-min-seconds", type=float, default=0.25)
+    parser.add_argument("--retry-max-seconds", type=float, default=0.5)
+    parser.add_argument("--waiting-room-poll-seconds", type=float, default=1.0)
     parser.add_argument("--tab2-delay-seconds", type=int, default=90)
     parser.add_argument("--screenshot-interval-seconds", type=int, default=10)
     parser.add_argument("--widget-timeout-seconds", type=int, default=120)
     return parser.parse_args()
 
 
+def parse_clock_time(value: str) -> time:
+    parts = value.split(":")
+    if len(parts) not in (2, 3):
+        raise argparse.ArgumentTypeError("Use 24-hour time as HH:MM or HH:MM:SS.")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+        second = int(parts[2]) if len(parts) == 3 else 0
+        return time(hour, minute, second)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Use 24-hour time as HH:MM or HH:MM:SS.") from exc
+
+
 def build_config(args: argparse.Namespace) -> RunConfig:
+    retry_min_seconds = args.retry_min_seconds
+    retry_max_seconds = args.retry_max_seconds
+    if retry_min_seconds <= 0 or retry_max_seconds < retry_min_seconds:
+        raise ValueError("--retry-max-seconds must be greater than or equal to --retry-min-seconds, and both must be positive.")
+    if args.waiting_room_poll_seconds <= 0:
+        raise ValueError("--waiting-room-poll-seconds must be positive.")
+    preload_time = parse_clock_time(args.preload_time) if isinstance(args.preload_time, str) else args.preload_time
+    start_time = parse_clock_time(args.start_time) if isinstance(args.start_time, str) else args.start_time
     return RunConfig(
         mode=args.mode,
         url=args.url,
         target_date=TARGET_DATE,
         target_date_iso=TARGET_DATE_ISO,
         max_retry_seconds=args.max_retry_seconds,
+        retry_min_seconds=retry_min_seconds,
+        retry_max_seconds=retry_max_seconds,
+        waiting_room_poll_seconds=args.waiting_room_poll_seconds,
         screenshot_interval_seconds=args.screenshot_interval_seconds,
-        preload_time=time(20, 57, 0),
-        start_time=time(21, 0, 0),
+        preload_time=preload_time,
+        start_time=start_time,
         tab2_delay_seconds=args.tab2_delay_seconds,
         widget_timeout_seconds=args.widget_timeout_seconds,
         headed=not args.headless,
@@ -618,7 +650,10 @@ def show_summary(config: RunConfig, details: GuestDetails, logger: JsonlLogger) 
     table.add_row("Target date", config.target_date)
     table.add_row("Party priority", "4 pax, then 3 pax after 90 seconds in book mode")
     table.add_row("Timezone", "Asia/Kuala_Lumpur")
-    table.add_row("Retry rate", "0.75s to 1.25s jitter, max 7 minutes by default")
+    table.add_row("Preload time", config.preload_time.isoformat())
+    table.add_row("Booking start", config.start_time.isoformat())
+    table.add_row("Retry rate", f"{config.retry_min_seconds}s to {config.retry_max_seconds}s jitter, max {config.max_retry_seconds} seconds")
+    table.add_row("Waiting-room poll", f"{config.waiting_room_poll_seconds} seconds")
     table.add_row("Widget timeout", f"{config.widget_timeout_seconds} seconds")
     table.add_row("Final submit", "enabled" if config.submit_final else "disabled")
     table.add_row("Name", details.name)
