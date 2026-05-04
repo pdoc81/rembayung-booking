@@ -493,6 +493,13 @@ async def wait_until_today_at(target: time, logger: JsonlLogger, label: str) -> 
     await asyncio.sleep(seconds)
 
 
+async def close_browser_quietly(browser: Browser, logger: JsonlLogger) -> None:
+    try:
+        await browser.close()
+    except Exception as exc:
+        logger.write("browser_close_failed", error=repr(exc))
+
+
 async def run_single_tab(
     browser: Browser,
     config: RunConfig,
@@ -567,7 +574,7 @@ async def run(config: RunConfig, details: GuestDetails, logger: JsonlLogger) -> 
                     await asyncio.sleep(3600)
         finally:
             if not done.is_set():
-                await browser.close()
+                await close_browser_quietly(browser, logger)
 
 
 def parse_args() -> argparse.Namespace:
