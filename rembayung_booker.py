@@ -13,7 +13,7 @@ import os
 import random
 import re
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Iterable
 from zoneinfo import ZoneInfo
@@ -34,8 +34,9 @@ from rich.table import Table
 
 TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 DEFAULT_URL = "https://reservation.umai.io/en/widget/rembayung"
-TARGET_DATE = "20 May 2026"
+TARGET_DATE = "After 20 May 2026, or any available date"
 TARGET_DATE_ISO = "2026-05-20"
+TARGET_AFTER_DATE = date(2026, 5, 20)
 LOG_DIR = Path("logs")
 SCREENSHOT_DIR = Path("screenshots")
 SAFE_STOP_WORDS = (
@@ -50,6 +51,33 @@ SAFE_STOP_WORDS = (
     "deposit",
 )
 TIME_PATTERN = re.compile(r"\b((?:[01]?\d|2[0-3]):[0-5]\d)\s*(am|pm|AM|PM)?\b")
+MONTHS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "mei": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
 
 
 console = Console()
@@ -77,6 +105,7 @@ class RunConfig:
     start_time: time
     tab2_delay_seconds: int
     widget_timeout_seconds: int
+    waiting_room_timeout_seconds: int
     backup_3_pax: bool
     headed: bool
     skip_schedule: bool
@@ -155,6 +184,76 @@ def extract_time_minutes(text: str) -> int | None:
 def slot_sort_key(text: str) -> int:
     minutes = extract_time_minutes(text)
     return minutes if minutes is not None else 24 * 60
+
+
+def parse_booking_date_text(
+    text: str,
+    default_year: int = TARGET_AFTER_DATE.year,
+    default_month: int = TARGET_AFTER_DATE.month,
+) -> date | None:
+    clean_text = " ".join(text.replace(",", " ").split())
+    day_only = re.fullmatch(r"[0-3]?\d", clean_text)
+    if day_only:
+        try:
+            return date(default_year, default_month, int(clean_text))
+        except ValueError:
+            return None
+
+    day_first = re.search(r"\b([0-3]?\d)\s+([A-Za-z]+)(?:\s+(\d{4}))?\b", clean_text, re.I)
+    if day_first:
+        day_text, month_text, year_text = day_first.groups()
+        month = MONTHS.get(month_text.lower())
+        if month:
+            try:
+                return date(int(year_text or default_year), month, int(day_text))
+            except ValueError:
+                return None
+
+    month_first = re.search(r"\b([A-Za-z]+)\s+([0-3]?\d)(?:\s+(\d{4}))?\b", clean_text, re.I)
+    if month_first:
+        month_text, day_text, year_text = month_first.groups()
+        month = MONTHS.get(month_text.lower())
+        if month:
+            try:
+                return date(int(year_text or default_year), month, int(day_text))
+            except ValueError:
+                return None
+
+    return None
+
+
+def choose_preferred_date_text(labels: Iterable[str], after_date: date = TARGET_AFTER_DATE) -> str | None:
+    candidates: list[tuple[date, str]] = []
+    for label in labels:
+        parsed_date = parse_booking_date_text(label, default_year=after_date.year)
+        if parsed_date:
+            candidates.append((parsed_date, label))
+    if not candidates:
+        return None
+
+    after_candidates = sorted((candidate for candidate in candidates if candidate[0] > after_date), key=lambda item: item[0])
+    if after_candidates:
+        return after_candidates[0][1]
+    return sorted(candidates, key=lambda item: item[0])[0][1]
+
+
+def format_duration(seconds: float) -> str:
+    rounded_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(rounded_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or hours:
+        parts.append(f"{minutes}m")
+    parts.append(f"{seconds}s")
+    return " ".join(parts)
+
+
+def get_widget_load_timeout_seconds(config: RunConfig, waiting_room_detected: bool) -> int:
+    if waiting_room_detected:
+        return config.waiting_room_timeout_seconds
+    return config.widget_timeout_seconds
 
 
 async def first_visible(locator: Locator, timeout_ms: int = 900) -> Locator | None:
@@ -245,14 +344,20 @@ class RembayungBooker:
             await self.page.wait_for_load_state("networkidle", timeout=25000)
         except PlaywrightTimeoutError:
             self.logger.write("networkidle_timeout", tab=self.tab_name)
-        deadline = datetime.now(TIMEZONE) + timedelta(seconds=self.config.widget_timeout_seconds)
+        started_at = datetime.now(TIMEZONE)
+        deadline = started_at + timedelta(seconds=get_widget_load_timeout_seconds(self.config, waiting_room_detected=False))
         waiting_room_logged = False
         while datetime.now(TIMEZONE) < deadline:
             if await self.is_waiting_room():
                 if not waiting_room_logged:
                     waiting_room_logged = True
+                    deadline = started_at + timedelta(seconds=get_widget_load_timeout_seconds(self.config, waiting_room_detected=True))
                     await self.mark_state("cloudflare-waiting-room")
-                    self.logger.write("waiting_room_detected", tab=self.tab_name)
+                    self.logger.write(
+                        "waiting_room_detected",
+                        tab=self.tab_name,
+                        max_wait_seconds=self.config.waiting_room_timeout_seconds,
+                    )
                 await self.page.wait_for_timeout(int(self.config.waiting_room_poll_seconds * 1000))
                 continue
             await self.page.wait_for_timeout(1500)
@@ -307,25 +412,46 @@ class RembayungBooker:
         if date_opened:
             await self.page.wait_for_timeout(500)
 
-        date_labels = (
-            re.compile(r"20\s+May\s+2026", re.I),
-            re.compile(r"May\s+20,?\s+2026", re.I),
-            re.compile(r"Wednesday,?\s+May\s+20", re.I),
-            re.compile(r"\b20\b"),
-        )
-        for label in date_labels:
-            clicked = await click_first(
-                f"target date {self.config.target_date}",
-                (
-                    self.page.get_by_role("button", name=label),
-                    self.page.get_by_label(label),
-                    self.page.get_by_text(label, exact=False),
-                ),
-                self.logger,
-            )
-            if clicked:
+        date_buttons = self.page.locator("button, [role=button]")
+        candidates: list[tuple[date, str, Locator]] = []
+        try:
+            count = await date_buttons.count()
+        except PlaywrightError:
+            count = 0
+        for index in range(min(count, 80)):
+            candidate = date_buttons.nth(index)
+            try:
+                if not await candidate.is_visible(timeout=300):
+                    continue
+                if hasattr(candidate, "is_enabled") and not await candidate.is_enabled(timeout=300):
+                    continue
+                text = " ".join((await candidate.inner_text(timeout=500)).split())
+                aria_label = await candidate.get_attribute("aria-label", timeout=500)
+            except PlaywrightError:
+                continue
+            label = aria_label or text
+            parsed_date = parse_booking_date_text(label or "", default_year=TARGET_AFTER_DATE.year)
+            if parsed_date:
+                candidates.append((parsed_date, label or text, candidate))
+
+        after_candidates = sorted((candidate for candidate in candidates if candidate[0] > TARGET_AFTER_DATE), key=lambda item: item[0])
+        fallback_candidates = sorted(candidates, key=lambda item: item[0])
+        selected = (after_candidates or fallback_candidates)[0] if candidates else None
+        if selected:
+            selected_date, selected_label, selected_locator = selected
+            try:
+                await selected_locator.click(timeout=2000)
+                self.logger.write(
+                    "date_selected",
+                    tab=self.tab_name,
+                    date=selected_date.isoformat(),
+                    label=selected_label,
+                    strategy="after_2026_05_20" if selected_date > TARGET_AFTER_DATE else "any_available",
+                )
                 await self.mark_state("date-selected")
                 return True
+            except PlaywrightError as exc:
+                self.logger.write("date_click_failed", tab=self.tab_name, label=selected_label, error=str(exc)[:180])
 
         self.logger.write("date_not_selected", tab=self.tab_name, target=self.config.target_date)
         return False
@@ -493,6 +619,13 @@ async def wait_until_today_at(target: time, logger: JsonlLogger, label: str) -> 
         logger.write("schedule_time_already_passed", label=label, target=target.isoformat())
         return
     seconds = (target_dt - now).total_seconds()
+    console.print(
+        Panel(
+            f"Waiting {format_duration(seconds)} until {target_dt.strftime('%H:%M:%S')} Malaysia time for {label}.\n"
+            "To start immediately, stop this run and use: python rembayung_booker.py book --skip-schedule",
+            title="Scheduled wait",
+        )
+    )
     logger.write("waiting_until", label=label, target=target_dt.isoformat(), seconds=round(seconds, 2))
     await asyncio.sleep(seconds)
 
@@ -613,6 +746,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tab2-delay-seconds", type=int, default=90)
     parser.add_argument("--screenshot-interval-seconds", type=int, default=10)
     parser.add_argument("--widget-timeout-seconds", type=int, default=120)
+    parser.add_argument("--waiting-room-timeout-seconds", type=int, default=4 * 60 * 60)
     return parser.parse_args()
 
 
@@ -636,6 +770,10 @@ def build_config(args: argparse.Namespace) -> RunConfig:
         raise ValueError("--retry-max-seconds must be greater than or equal to --retry-min-seconds, and both must be positive.")
     if args.waiting_room_poll_seconds <= 0:
         raise ValueError("--waiting-room-poll-seconds must be positive.")
+    if args.widget_timeout_seconds <= 0:
+        raise ValueError("--widget-timeout-seconds must be positive.")
+    if args.waiting_room_timeout_seconds < args.widget_timeout_seconds:
+        raise ValueError("--waiting-room-timeout-seconds must be greater than or equal to --widget-timeout-seconds.")
     preload_time = parse_clock_time(args.preload_time) if isinstance(args.preload_time, str) else args.preload_time
     start_time = parse_clock_time(args.start_time) if isinstance(args.start_time, str) else args.start_time
     return RunConfig(
@@ -652,6 +790,7 @@ def build_config(args: argparse.Namespace) -> RunConfig:
         start_time=start_time,
         tab2_delay_seconds=args.tab2_delay_seconds,
         widget_timeout_seconds=args.widget_timeout_seconds,
+        waiting_room_timeout_seconds=args.waiting_room_timeout_seconds,
         backup_3_pax=args.backup_3_pax,
         headed=not args.headless,
         skip_schedule=args.skip_schedule,
@@ -671,11 +810,13 @@ def show_summary(config: RunConfig, details: GuestDetails, logger: JsonlLogger) 
         f"4 pax only; 3 pax backup after {config.tab2_delay_seconds} seconds" if config.backup_3_pax else "4 pax only",
     )
     table.add_row("Timezone", "Asia/Kuala_Lumpur")
+    table.add_row("Schedule", "disabled; starts immediately" if config.skip_schedule else "enabled")
     table.add_row("Preload time", config.preload_time.isoformat())
     table.add_row("Booking start", config.start_time.isoformat())
     table.add_row("Retry rate", f"{config.retry_min_seconds}s to {config.retry_max_seconds}s jitter, max {config.max_retry_seconds} seconds")
     table.add_row("Waiting-room poll", f"{config.waiting_room_poll_seconds} seconds")
     table.add_row("Widget timeout", f"{config.widget_timeout_seconds} seconds")
+    table.add_row("Waiting-room timeout", format_duration(config.waiting_room_timeout_seconds))
     table.add_row("Final submit", "enabled" if config.submit_final else "disabled")
     table.add_row("Name", details.name)
     table.add_row("Phone", details.phone)

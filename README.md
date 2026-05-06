@@ -12,7 +12,7 @@ The minimal working path is:
 
 1. Open the reservation page.
 2. Wait for the widget to load.
-3. Select `20 May 2026`.
+3. Select the earliest available date after `20 May 2026`; if none is found, select any available date.
 4. Select party size.
 5. Detect available time slots.
 6. Pick the earliest available slot.
@@ -39,6 +39,7 @@ In `book` mode it can also fill your name, phone, and email. Final submit is dis
 - Booking interactions start at `21:00:00` Malaysia time.
 - Retries use random jitter between 0.25 and 0.5 seconds by default.
 - Waiting-room checks poll every 1 second by default.
+- If Cloudflare puts you in the waiting room, the tool keeps monitoring for up to 4 hours by default.
 - Default retry window is 7 minutes.
 - In headed mode, the browser stays open until you close it manually.
 - The tool stops on OTP, CAPTCHA, payment, or deposit screens.
@@ -66,7 +67,7 @@ Waits until today at `20:50` Malaysia time, opens the browser to join the queue,
 You can tune the schedule and polling if needed:
 
 ```bash
-python rembayung_booker.py book --preload-time 20:50 --start-time 21:00 --retry-min-seconds 0.25 --retry-max-seconds 0.5 --waiting-room-poll-seconds 1
+python rembayung_booker.py book --preload-time 20:50 --start-time 21:00 --retry-min-seconds 0.25 --retry-max-seconds 0.5 --waiting-room-poll-seconds 1 --waiting-room-timeout-seconds 14400
 ```
 
 If you explicitly want the second 3-pax backup window:
@@ -93,7 +94,7 @@ Useful testing option:
 python rembayung_booker.py dry-run --skip-schedule --widget-timeout-seconds 300
 ```
 
-If the site places you in the Cloudflare waiting room, the tool waits at a slow interval and screenshots the state. It does not try to bypass the queue.
+If the site places you in the Cloudflare waiting room, the tool waits at a slow interval and screenshots the state. It does not try to bypass the queue. The normal widget timeout is short, but after the waiting room is detected the tool uses `--waiting-room-timeout-seconds`, which defaults to 4 hours.
 
 ## Windows Setup
 

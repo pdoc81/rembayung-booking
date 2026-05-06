@@ -1,15 +1,18 @@
 import asyncio
 
 import argparse
-from datetime import time
+from datetime import date, time
 
 import pytest
 
 from rembayung_booker import (
     build_config,
+    choose_preferred_date_text,
     close_browser_quietly,
     create_booking_attempts,
     extract_time_minutes,
+    format_duration,
+    get_widget_load_timeout_seconds,
     jitter_delay,
     parse_clock_time,
     should_keep_browser_open,
@@ -61,6 +64,7 @@ def test_book_mode_defaults_preload_at_850_and_start_at_900():
         tab2_delay_seconds=90,
         screenshot_interval_seconds=10,
         widget_timeout_seconds=120,
+        waiting_room_timeout_seconds=4 * 60 * 60,
         backup_3_pax=False,
         preload_time="20:50",
         start_time="21:00",
@@ -76,6 +80,7 @@ def test_book_mode_defaults_preload_at_850_and_start_at_900():
     assert config.retry_min_seconds == 0.25
     assert config.retry_max_seconds == 0.5
     assert config.waiting_room_poll_seconds == 1.0
+    assert config.waiting_room_timeout_seconds == 4 * 60 * 60
     assert config.backup_3_pax is False
 
 
@@ -90,6 +95,7 @@ def test_book_mode_uses_one_attempt_by_default():
         tab2_delay_seconds=90,
         screenshot_interval_seconds=10,
         widget_timeout_seconds=120,
+        waiting_room_timeout_seconds=4 * 60 * 60,
         backup_3_pax=False,
         preload_time="20:50",
         start_time="21:00",
@@ -112,6 +118,7 @@ def test_book_mode_can_enable_three_pax_backup():
         tab2_delay_seconds=90,
         screenshot_interval_seconds=10,
         widget_timeout_seconds=120,
+        waiting_room_timeout_seconds=4 * 60 * 60,
         backup_3_pax=True,
         preload_time="20:50",
         start_time="21:00",
@@ -131,6 +138,67 @@ def test_parse_clock_time_accepts_hh_mm_and_hh_mm_ss():
 def test_parse_clock_time_rejects_invalid_values():
     with pytest.raises(argparse.ArgumentTypeError):
         parse_clock_time("8.50pm")
+
+
+def test_choose_preferred_date_text_prefers_after_minimum_date():
+    labels = ["20 May 2026", "21 May 2026", "23 May 2026"]
+
+    assert choose_preferred_date_text(labels, after_date=date(2026, 5, 20)) == "21 May 2026"
+
+
+def test_choose_preferred_date_text_falls_back_to_any_available_date():
+    labels = ["18 May 2026", "20 May 2026"]
+
+    assert choose_preferred_date_text(labels, after_date=date(2026, 5, 20)) == "18 May 2026"
+
+
+def test_choose_preferred_date_text_handles_weekday_labels():
+    labels = ["Wednesday, May 20", "Thursday, May 21", "Friday, May 22"]
+
+    assert choose_preferred_date_text(labels, after_date=date(2026, 5, 20)) == "Thursday, May 21"
+
+
+def test_choose_preferred_date_text_handles_malay_may_label():
+    labels = ["20 Mei 2026", "21 Mei 2026"]
+
+    assert choose_preferred_date_text(labels, after_date=date(2026, 5, 20)) == "21 Mei 2026"
+
+
+def test_choose_preferred_date_text_handles_day_number_labels_for_target_month():
+    labels = ["19", "20", "21", "22"]
+
+    assert choose_preferred_date_text(labels, after_date=date(2026, 5, 20)) == "21"
+
+
+def test_format_duration_shows_long_waits_readably():
+    assert format_duration(4 * 60 * 60) == "4h 0m 0s"
+    assert format_duration(3926.9) == "1h 5m 27s"
+    assert format_duration(45) == "45s"
+
+
+def test_widget_load_timeout_extends_after_waiting_room_is_detected():
+    args = argparse.Namespace(
+        mode="book",
+        url="https://example.test",
+        max_retry_seconds=7 * 60,
+        retry_min_seconds=0.25,
+        retry_max_seconds=0.5,
+        waiting_room_poll_seconds=1.0,
+        tab2_delay_seconds=90,
+        screenshot_interval_seconds=10,
+        widget_timeout_seconds=120,
+        waiting_room_timeout_seconds=4 * 60 * 60,
+        backup_3_pax=False,
+        preload_time="20:50",
+        start_time="21:00",
+        headless=False,
+        skip_schedule=False,
+        submit_final=False,
+    )
+    config = build_config(args)
+
+    assert get_widget_load_timeout_seconds(config, waiting_room_detected=False) == 120
+    assert get_widget_load_timeout_seconds(config, waiting_room_detected=True) == 4 * 60 * 60
 
 
 def test_jitter_delay_uses_configured_range():
@@ -160,6 +228,7 @@ def test_headed_mode_keeps_browser_open_for_manual_close():
         tab2_delay_seconds=90,
         screenshot_interval_seconds=10,
         widget_timeout_seconds=120,
+        waiting_room_timeout_seconds=4 * 60 * 60,
         backup_3_pax=False,
         preload_time="20:50",
         start_time="21:00",
@@ -182,6 +251,7 @@ def test_headless_mode_closes_browser_when_done():
         tab2_delay_seconds=90,
         screenshot_interval_seconds=10,
         widget_timeout_seconds=120,
+        waiting_room_timeout_seconds=4 * 60 * 60,
         backup_3_pax=False,
         preload_time="20:50",
         start_time="21:00",
